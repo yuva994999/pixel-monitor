@@ -2,6 +2,7 @@ import os
 import requests
 import time
 import logging
+from datetime import datetime, timedelta
 
 # ======================
 # CONFIGURATION
@@ -15,7 +16,8 @@ CHAT_IDS = [
     "1687855096"
 ]
 
-CHECK_INTERVAL = 300  # seconds
+CHECK_INTERVAL = 300  # check every 5 minutes
+FULL_REPORT_INTERVAL = 43200  # 2 hours
 
 TYPESENSE_URL = "https://search-api.usedproducts.nl/collections/site_687f817e04331_usedproducts/documents/search"
 
@@ -33,9 +35,13 @@ TARGET_MODELS = [
 
 BASE_URL = "https://www.usedproducts.nl"
 
-seen = set()
+MAX_PAGES = 10
 
-MAX_PAGES = 10  # optimization (Pixel phones appear in first few pages)
+# Track seen deals
+seen_ever = set()
+
+# Track last full report time
+last_full_report = datetime.min
 
 # ======================
 # LOGGING
@@ -74,7 +80,7 @@ def send_alert(message):
             logging.error(e)
 
 # ======================
-# BUILD CORRECT PRODUCT LINK
+# BUILD PRODUCT LINK
 # ======================
 
 def build_link(name, product_id):
@@ -94,28 +100,24 @@ def is_target(name):
     return any(model in name for model in TARGET_MODELS)
 
 # ======================
-# SCRAPER
+# GET ALL PIXEL DEALS
 # ======================
 
-def scrape():
-
-    logging.info("Checking Pixel category...")
+def get_all_pixel_deals():
 
     headers = {
         "X-TYPESENSE-API-KEY": API_KEY
     }
 
     page = 1
-    per_page = 100
-
-    total_found = 0
+    deals = []
 
     while page <= MAX_PAGES:
 
         params = {
             "q": "Google Pixel",
             "query_by": "name",
-            "per_page": per_page,
+            "per_page": 100,
             "page": page
         }
 
@@ -133,16 +135,12 @@ def scrape():
         except Exception as e:
 
             logging.error(e)
-            return
+            break
 
         hits = data.get("hits", [])
 
         if not hits:
             break
-
-        logging.info(f"Page {page}: {len(hits)} products")
-
-        page_found = 0
 
         for hit in hits:
 
@@ -153,7 +151,6 @@ def scrape():
             product_id = doc.get("id", "")
             categories = doc.get("categories", [])
 
-            # Only Pixel category
             if not any("Google Pixel" in cat for cat in categories):
                 continue
 
@@ -162,32 +159,72 @@ def scrape():
 
             link = build_link(name, product_id)
 
-            if link in seen:
-                continue
-
-            seen.add(link)
-
-            total_found += 1
-            page_found += 1
-
-            logging.info(f"FOUND: {name} → €{price}")
-
-            message = (
-                f"🔥 Pixel Deal Found\n\n"
-                f"{name}\n"
-                f"€{price}\n"
-                f"{link}"
-            )
-
-            send_alert(message)
-
-        # Stop early if no results in page
-        if page_found == 0 and page > 3:
-            break
+            deals.append({
+                "name": name,
+                "price": price,
+                "link": link
+            })
 
         page += 1
 
-    logging.info(f"Total new Pixel devices found: {total_found}")
+    return deals
+
+# ======================
+# MAIN SCRAPER LOGIC
+# ======================
+
+def scrape():
+
+    global last_full_report
+
+    logging.info("Checking Pixel deals...")
+
+    deals = get_all_pixel_deals()
+
+    now = datetime.now()
+
+    # ======================
+    # SEND FULL REPORT EVERY 2 HOURS
+    # ======================
+
+    if (now - last_full_report).total_seconds() >= FULL_REPORT_INTERVAL:
+
+        logging.info("Sending FULL REPORT")
+
+        message = "📱 FULL PIXEL DEAL LIST\n\n"
+
+        for deal in deals:
+
+            message += (
+                f"{deal['name']}\n"
+                f"€{deal['price']}\n"
+                f"{deal['link']}\n\n"
+            )
+
+        send_alert(message)
+
+        last_full_report = now
+
+    # ======================
+    # SEND INSTANT ALERT FOR NEW DEALS
+    # ======================
+
+    for deal in deals:
+
+        if deal["link"] not in seen_ever:
+
+            seen_ever.add(deal["link"])
+
+            logging.info(f"NEW DEAL: {deal['name']}")
+
+            message = (
+                f"🔥 NEW PIXEL DEAL\n\n"
+                f"{deal['name']}\n"
+                f"€{deal['price']}\n"
+                f"{deal['link']}"
+            )
+
+            send_alert(message)
 
 # ======================
 # MAIN LOOP
