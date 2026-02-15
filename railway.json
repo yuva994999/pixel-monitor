@@ -4,6 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "playwright install chromium && python pixel_price_alert.py"
+    "startCommand": "python pixel_price_alert.py"
   }
 }
+
