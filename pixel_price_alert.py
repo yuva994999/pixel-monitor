@@ -10,11 +10,13 @@ from datetime import datetime, timedelta
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-CHAT_IDS = [
-    "636892672",
-    "276569960",
-    "1687855096"
-]
+CHAT_IDS = os.getenv("CHAT_IDS", "").split(",")
+
+if not BOT_TOKEN:
+    raise Exception("BOT_TOKEN not set")
+
+if not CHAT_IDS or CHAT_IDS == [""]:
+    raise Exception("CHAT_IDS not set")
 
 CHECK_INTERVAL = 300  # check every 5 minutes
 FULL_REPORT_INTERVAL = 43200  # 2 hours
@@ -248,3 +250,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
