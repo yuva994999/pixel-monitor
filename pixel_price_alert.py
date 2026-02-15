@@ -1,13 +1,7 @@
-import time
 import os
-import logging
 import requests
-
-from playwright.sync_api import sync_playwright
-
-# ======================
-# TELEGRAM CONFIG
-# ======================
+import time
+import logging
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
@@ -17,108 +11,124 @@ CHAT_IDS = [
     "1687855096"
 ]
 
-# ======================
-# WEBSITE
-# ======================
+CHECK_INTERVAL = 300
 
-URL = "https://www.usedproducts.nl/Google-Pixel-c185273001/"
+TYPESENSE_URL = "https://search-api.usedproducts.nl/collections/site_687f817e04331_usedproducts/documents/search"
 
-CHECK_INTERVAL = 1800
+API_KEY = "6XZnCsZKtLKq8PFHAwBVWl7HM1jP4NeX"
 
 TARGET_MODELS = [
     "pixel 10 pro xl",
     "pixel 10 pro",
+    "pixel 10"
     "pixel 9 pro xl",
     "pixel 9 pro",
-    "pixel 9",
-    "pixel 9a"
+    "pixel 9a",
+    "pixel 9"
 ]
 
 seen = set()
 
-# ======================
-# LOGGING
-# ======================
-
 logging.basicConfig(level=logging.INFO)
 
 # ======================
-# TELEGRAM
+# TELEGRAM ALERT
 # ======================
 
-def send(msg):
+def send_alert(message):
+
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
     for chat_id in CHAT_IDS:
 
         try:
-
-            requests.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                data={"chat_id": chat_id, "text": msg}
-            )
-
-            logging.info(f"Sent alert to {chat_id}")
+            requests.post(url, json={"chat_id": chat_id, "text": message})
+            logging.info(f"Alert sent to {chat_id}")
 
         except Exception as e:
-
             logging.error(e)
-
-# ======================
-# FILTER
-# ======================
-
-def is_target(title):
-
-    title = title.lower()
-
-    return any(model in title for model in TARGET_MODELS)
 
 # ======================
 # SCRAPER
 # ======================
 
-def scrape(page):
+def scrape():
 
-    page.goto(URL)
+    logging.info("Checking Pixel category...")
 
-    page.wait_for_timeout(5000)
+    headers = {
+        "X-TYPESENSE-API-KEY": API_KEY
+    }
 
-    products = page.query_selector_all(".grid-product__wrap-inner")
+    page = 1
+    per_page = 100
+    total_found = 0
 
-    logging.info(f"Found {len(products)} products")
+    # First request to get total count
+    params = {
+        "q": "Google Pixel",
+        "query_by": "name",
+        "per_page": per_page,
+        "page": 1
+    }
 
-    for product in products:
+    r = requests.get(TYPESENSE_URL, headers=headers, params=params)
+    data = r.json()
 
-        try:
+    total_products = data.get("found", 0)
 
-            title = product.query_selector(
-                ".grid-product__title-inner"
-            ).inner_text().strip()
+    max_pages = (total_products // per_page) + 1
 
-            if not is_target(title):
+    logging.info(f"Total products in database: {total_products}")
+    logging.info(f"Total pages: {max_pages}")
+
+    while page <= max_pages:
+
+        params["page"] = page
+
+        r = requests.get(TYPESENSE_URL, headers=headers, params=params)
+        data = r.json()
+
+        hits = data.get("hits", [])
+
+        logging.info(f"Page {page}: {len(hits)} products")
+
+        for hit in hits:
+
+            doc = hit["document"]
+
+            name = doc.get("name", "")
+            price = doc.get("price", "")
+            url = doc.get("url", "")
+            categories = doc.get("categories", [])
+
+            # Only Pixel category
+            if not any("Google Pixel" in cat for cat in categories):
                 continue
 
-            price = product.query_selector(
-                ".grid-product__price-value"
-            ).inner_text().strip()
+            name_lower = name.lower()
 
-            link = product.query_selector(
-                "a.grid-product__title"
-            ).get_attribute("href")
-
-            full_link = f"https://www.usedproducts.nl{link}"
-
-            if full_link in seen:
+            if not any(model in name_lower for model in TARGET_MODELS):
                 continue
 
-            seen.add(full_link)
+            link = f"https://www.usedproducts.nl{url}"
 
-            logging.info(f"FOUND: {title} {price}")
+            if link in seen:
+                continue
 
-            send(f"🔥 Pixel Found\n\n{title}\n{price}\n{full_link}")
+            seen.add(link)
 
-        except:
-            continue
+            total_found += 1
+
+            logging.info(f"FOUND: {name} → €{price}")
+
+            send_alert(
+                f"🔥 Pixel Found\n\n{name}\n€{price}\n{link}"
+            )
+
+        page += 1
+
+    logging.info(f"Total Pixel devices found: {total_found}")
 
 # ======================
 # MAIN LOOP
@@ -126,22 +136,19 @@ def scrape(page):
 
 def main():
 
-    send("Pixel monitor started")
+    logging.info("Pixel monitor started")
 
-    with sync_playwright() as p:
+    send_alert("Pixel monitor started")
 
-        browser = p.chromium.launch(headless=True)
+    while True:
 
-        page = browser.new_page()
+        scrape()
 
-        while True:
+        logging.info("Sleeping...")
 
-            scrape(page)
-
-            logging.info("Sleeping...")
-
-            time.sleep(CHECK_INTERVAL)
+        time.sleep(CHECK_INTERVAL)
 
 # ======================
 
-main()
+if __name__ == "__main__":
+    main()
